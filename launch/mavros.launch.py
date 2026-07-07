@@ -5,10 +5,11 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch_ros.actions import Node
 from launch.conditions import IfCondition
-from launch_ros.parameter_descriptions import ParameterFile
 from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import ComposableNodeContainer, Node
+from launch_ros.descriptions import ComposableNode
+from launch_ros.parameter_descriptions import ParameterFile
 
 
 def generate_launch_description():
@@ -24,11 +25,14 @@ def generate_launch_description():
         rate = 921600 if OLD_PX4_FW else 2000000
         default_fcu_url = f"/dev/pixhawk:{rate}"
 
-    gcs_url = "tcp-l://"
+    # default_gcs_url = "tcp-l://"
+    default_gcs_url = ""
 
     uav_name = LaunchConfiguration("uav_name")
     fcu_url = LaunchConfiguration("fcu_url")
+    gcs_url = LaunchConfiguration("gcs_url")
     tgt_system = LaunchConfiguration("tgt_system")
+    tgt_component = LaunchConfiguration("tgt_component")
     config_yaml = LaunchConfiguration("config_yaml")
     use_sim_time = LaunchConfiguration("use_sim_time")
     use_default_garmin_tf = LaunchConfiguration("use_default_garmin_tf")
@@ -43,7 +47,12 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "fcu_url",
             default_value=default_fcu_url,
-            description="FCU URL used by MAVROS",
+            description="FCU URL used by MAVROS router",
+        ),
+        DeclareLaunchArgument(
+            "gcs_url",
+            default_value=default_gcs_url,
+            description="GCS URL used by MAVROS router",
         ),
         DeclareLaunchArgument(
             "use_sim_time",
@@ -63,6 +72,11 @@ def generate_launch_description():
             description="Target system ID for MAVROS",
         ),
         DeclareLaunchArgument(
+            "tgt_component",
+            default_value="1",
+            description="Target component ID for MAVROS",
+        ),
+        DeclareLaunchArgument(
             "use_default_garmin_tf",
             default_value="true",
             description="Whether to use the default Garmin TF transform",
@@ -70,32 +84,66 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "frame_id_namespace",
             default_value="",
-            description="Namespace for frame IDs",
+            description="Namespace prefix for frame IDs",
         ),
     ]
 
-    mavros_node = Node(
-        package="mavros",
-        executable="mavros_node",
-        namespace=[uav_name, "/mavros"],
+    mavros_container = ComposableNodeContainer(
+        name="mavros",
+        namespace=uav_name,
+        package="rclcpp_components",
+        executable="component_container_mt",
         output="screen",
-        parameters=[
-            {"fcu_url": fcu_url},
-            {"gcs_url": gcs_url},
-            {"tgt_system": tgt_system},
-            {"tgt_component": 1},
-            {"fcu_protocol": "v2.0"},
-            {"use_sim_time": use_sim_time},
-            {"base_link_frame_id": [frame_id_namespace, "/base_link"]},
-            {"odom_frame_id": [frame_id_namespace, "/odom"]},
-            {"map_frame_id": [frame_id_namespace, "/map"]},
-            ParameterFile(this_pkg_path + "/config/mavros_plugins.yaml", allow_substs=True),
-            ParameterFile(config_yaml, allow_substs=True),
-        ],
-        remappings=[
-            ("/diagnostics", "diagnostics"),
-            (["/uas", tgt_system, "/mavlink_source"], "mavlink/source"),
-            (["/uas", tgt_system, "/mavlink_sink"], "mavlink/sink"),
+        emulate_tty=True,
+        composable_node_descriptions=[
+            ComposableNode(
+                package="mavros",
+                plugin="mavros::router::Router",
+                name="mavros_router",
+                namespace="",
+                parameters=[
+                    {
+                        "fcu_urls": [fcu_url],
+                        "gcs_urls": [gcs_url],
+                        "uas_urls": [[uav_name, "/mavlink"]],
+                        "use_sim_time": use_sim_time,
+                    }
+                ],
+                # extra_arguments=[
+                #     {"use_intra_process_comms": True},
+                # ],
+            ),
+            ComposableNode(
+                package="mavros",
+                plugin="mavros::uas::UAS",
+                name="mavros",
+                namespace="",
+                parameters=[
+                    {
+                        "uas_url": [uav_name, "/mavlink"],
+                        "tgt_system": tgt_system,
+                        "tgt_component": tgt_component,
+                        "use_sim_time": use_sim_time,
+                        "base_link_frame_id": [frame_id_namespace, "/base_link"],
+                        "odom_frame_id": [frame_id_namespace, "/odom"],
+                        "map_frame_id": [frame_id_namespace, "/map"],
+                    },
+                    ParameterFile(
+                        this_pkg_path + "/config/mavros_plugins.yaml",
+                        allow_substs=True,
+                    ),
+                    ParameterFile(
+                        config_yaml,
+                        allow_substs=True,
+                    ),
+                ],
+                remappings=[
+                    ("/diagnostics", "diagnostics"),
+                ],
+                # extra_arguments=[
+                #     {"use_intra_process_comms": True},
+                # ],
+            ),
         ],
     )
 
@@ -111,7 +159,7 @@ def generate_launch_description():
     return LaunchDescription(
         launch_arguments
         + [
-            mavros_node,
+            mavros_container,
             garmin_tf_node,
         ]
     )
