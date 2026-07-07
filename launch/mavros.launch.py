@@ -31,12 +31,12 @@ def generate_launch_description():
     uav_name = LaunchConfiguration("uav_name")
     fcu_url = LaunchConfiguration("fcu_url")
     gcs_url = LaunchConfiguration("gcs_url")
-    tgt_system = LaunchConfiguration("tgt_system")
-    tgt_component = LaunchConfiguration("tgt_component")
+    target_system_id = LaunchConfiguration("target_system_id")
+    target_component_id = LaunchConfiguration("target_component_id")
     config_yaml = LaunchConfiguration("config_yaml")
     use_sim_time = LaunchConfiguration("use_sim_time")
     use_default_garmin_tf = LaunchConfiguration("use_default_garmin_tf")
-    frame_id_namespace = LaunchConfiguration("frame_id_namespace")
+    tf_namespace = LaunchConfiguration("tf_namespace")
 
     launch_arguments = [
         DeclareLaunchArgument(
@@ -67,12 +67,12 @@ def generate_launch_description():
             description="Path to the MAVROS PX4 config YAML file",
         ),
         DeclareLaunchArgument(
-            "tgt_system",
+            "target_system_id",
             default_value="1",
             description="Target system ID for MAVROS",
         ),
         DeclareLaunchArgument(
-            "tgt_component",
+            "target_component_id",
             default_value="1",
             description="Target component ID for MAVROS",
         ),
@@ -82,11 +82,13 @@ def generate_launch_description():
             description="Whether to use the default Garmin TF transform",
         ),
         DeclareLaunchArgument(
-            "frame_id_namespace",
+            "tf_namespace",
             default_value="",
             description="Namespace prefix for frame IDs",
         ),
     ]
+
+    namespace = [uav_name, "/mavros"]
 
     mavros_container = ComposableNodeContainer(
         name="mavros",
@@ -99,13 +101,13 @@ def generate_launch_description():
             ComposableNode(
                 package="mavros",
                 plugin="mavros::router::Router",
-                name="mavros_router",
-                namespace="",
+                name="router",
+                namespace=namespace,
                 parameters=[
                     {
-                        "fcu_urls": [fcu_url],
-                        "gcs_urls": [gcs_url],
-                        "uas_urls": [[uav_name, "/mavlink"]],
+                        "fcu_urls": [[fcu_url]],
+                        "uas_urls": [[uav_name]],
+                        # "gcs_urls": [[gcs_url]] if gcs_url != "" else [],
                         "use_sim_time": use_sim_time,
                     }
                 ],
@@ -117,25 +119,19 @@ def generate_launch_description():
                 package="mavros",
                 plugin="mavros::uas::UAS",
                 name="mavros",
-                namespace="",
+                namespace=namespace,
                 parameters=[
                     {
-                        "uas_url": [uav_name, "/mavlink"],
-                        "tgt_system": tgt_system,
-                        "tgt_component": tgt_component,
+                        "uas_url": uav_name,
+                        "target_system_id": target_system_id,
+                        "target_component_id": target_component_id,
                         "use_sim_time": use_sim_time,
-                        "base_link_frame_id": [frame_id_namespace, "/base_link"],
-                        "odom_frame_id": [frame_id_namespace, "/odom"],
-                        "map_frame_id": [frame_id_namespace, "/map"],
+                        "base_link_frame_id": [tf_namespace, "/base_link"],
+                        "odom_frame_id": [tf_namespace, "/odom"],
+                        "map_frame_id": [tf_namespace, "/map"],
                     },
-                    ParameterFile(
-                        this_pkg_path + "/config/mavros_plugins.yaml",
-                        allow_substs=True,
-                    ),
-                    ParameterFile(
-                        config_yaml,
-                        allow_substs=True,
-                    ),
+                    ParameterFile(this_pkg_path + "/config/mavros_plugins.yaml", allow_substs=True),
+                    ParameterFile(config_yaml, allow_substs=True),
                 ],
                 remappings=[
                     ("/diagnostics", "diagnostics"),
@@ -157,8 +153,8 @@ def generate_launch_description():
     )
 
     return LaunchDescription(
-        launch_arguments
-        + [
+        [
+            *launch_arguments,
             mavros_container,
             garmin_tf_node,
         ]
