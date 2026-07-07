@@ -23,7 +23,7 @@ def generate_launch_description():
         default_fcu_url = f"udp://:14550@{PX4_IP}:14550"
     else:
         rate = 921600 if OLD_PX4_FW else 2000000
-        default_fcu_url = f"/dev/pixhawk:{rate}"
+        default_fcu_url = f"serial:///dev/pixhawk:{rate}"
 
     # default_gcs_url = "tcp-l://"
     default_gcs_url = ""
