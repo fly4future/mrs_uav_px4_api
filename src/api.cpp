@@ -80,7 +80,6 @@ public:
   rclcpp::Node::SharedPtr  node_;
   rclcpp::Clock::SharedPtr clock_;
 
-  rclcpp::CallbackGroup::SharedPtr callback_group_;
   rclcpp::CallbackGroup::SharedPtr cbkgrp_ss_;
 
   // | --------------------- status methods --------------------- |
@@ -148,13 +147,14 @@ private:
   std::string _sim_rtk_utm_zone_;
   double      _sim_rtk_amsl_;
 
-  double _ref_sin_lat;
-  double _ref_cos_lat;
-  double _ref_lat;
-  double _ref_lon;
-  double _ref_utm_x;
-  double _ref_utm_y;
-  bool   _ref_latlon_init = false;
+  std::mutex mutex_ref_latlon_;
+  double     _ref_sin_lat;
+  double     _ref_cos_lat;
+  double     _ref_lat;
+  double     _ref_lon;
+  double     _ref_utm_x;
+  double     _ref_utm_y;
+  bool       _ref_latlon_init = false;
 
   // | --------------------- service clients -------------------- |
 
@@ -200,6 +200,12 @@ private:
   void timeoutMavrosState(void);
 
   double RCChannelToRange(const double &rc_value);
+
+  // | -------------------- callback groups ------------------- |
+
+  std::vector<rclcpp::CallbackGroup::SharedPtr> callback_groups_;
+
+  rclcpp::CallbackGroup::SharedPtr newCallbackGroup();
 
   // | ----------------------- publishers ----------------------- |
 
@@ -264,8 +270,7 @@ void MrsUavPx4Api::initialize(const rclcpp::Node::SharedPtr &node, std::shared_p
 
   _capabilities_.api_name = "Px4Api";
 
-  callback_group_ = node_->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
-  cbkgrp_ss_      = node_->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+  cbkgrp_ss_ = node_->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
   last_mavros_state_time_ = rclcpp::Time(0, 0, clock_->get_clock_type());
 
@@ -328,8 +333,8 @@ void MrsUavPx4Api::initialize(const rclcpp::Node::SharedPtr &node, std::shared_p
 
   // | --------------------- service clients -------------------- |
 
-  sch_mavros_command_long_ = mrs_lib::ServiceClientHandler<mavros_msgs::srv::CommandLong>(node_, "~/mavros_cmd_out", callback_group_);
-  sch_mavros_mode_         = mrs_lib::ServiceClientHandler<mavros_msgs::srv::SetMode>(node_, "~/mavros_set_mode_out", callback_group_);
+  sch_mavros_command_long_ = mrs_lib::ServiceClientHandler<mavros_msgs::srv::CommandLong>(node_, "~/mavros_cmd_out", newCallbackGroup());
+  sch_mavros_mode_         = mrs_lib::ServiceClientHandler<mavros_msgs::srv::SetMode>(node_, "~/mavros_set_mode_out", newCallbackGroup());
 
 
   // | --------------------- service server -------------------- |
@@ -345,48 +350,57 @@ void MrsUavPx4Api::initialize(const rclcpp::Node::SharedPtr &node, std::shared_p
   qos_profile.reliability(RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT);
 
   mrs_lib::SubscriberHandlerOptions shopts;
-  shopts.node                                = node_;
-  shopts.node_name                           = "MrsHwPx4Api";
-  shopts.no_message_timeout                  = rclcpp::Duration::from_seconds(1.0);
-  shopts.threadsafe                          = true;
-  shopts.autostart                           = true;
-  shopts.subscription_options.callback_group = callback_group_;
-  shopts.qos                                 = qos_profile;
+  shopts.node               = node_;
+  shopts.node_name          = "MrsHwPx4Api";
+  shopts.no_message_timeout = rclcpp::Duration::from_seconds(1.0);
+  shopts.threadsafe         = true;
+  shopts.autostart          = true;
+  shopts.qos                = qos_profile;
 
   if (_simulation_) {
-    sh_ground_truth_ = mrs_lib::SubscriberHandler<nav_msgs::msg::Odometry>(shopts, "~/ground_truth_in", &MrsUavPx4Api::callbackGroundTruth, this);
+    shopts.subscription_options.callback_group = newCallbackGroup();
+    sh_ground_truth_                           = mrs_lib::SubscriberHandler<nav_msgs::msg::Odometry>(shopts, "~/ground_truth_in", &MrsUavPx4Api::callbackGroundTruth, this);
   }
 
   /* if (!_simulation_) { */
   /* sh_rtk_ = mrs_lib::SubscriberHandler<mrs_modules_msgs::msg::Bestpos>(shopts, "rtk_in", &MrsUavPx4Api::callbackRTK, this); */
   /* } */
 
+  shopts.subscription_options.callback_group = newCallbackGroup();
   init_subscriber_handler(this, sh_mavros_state_, shopts, "~/mavros_state_in", &MrsUavPx4Api::callbackMavrosState, error_type_t::not_receiving_mavros_state,
                           "Not receiving Mavros state messages");
 
+  shopts.subscription_options.callback_group = newCallbackGroup();
   sh_mavros_odometry_local_ =
       mrs_lib::SubscriberHandler<nav_msgs::msg::Odometry>(shopts, "~/mavros_local_position_in", &MrsUavPx4Api::callbackOdometryLocal, this);
 
+  shopts.subscription_options.callback_group = newCallbackGroup();
   sh_mavros_odometry_in_ = mrs_lib::SubscriberHandler<nav_msgs::msg::Odometry>(shopts, "~/mavros_odometry_in", &MrsUavPx4Api::callbackOdometryIn, this);
 
+  shopts.subscription_options.callback_group = newCallbackGroup();
   init_subscriber_handler(this, sh_mavros_gps_, shopts, "~/mavros_global_position_in", &MrsUavPx4Api::callbackNavsatFix, error_type_t::not_receiving_gps,
                           "Not receiving GPS data");
 
+  shopts.subscription_options.callback_group = newCallbackGroup();
   init_subscriber_handler(this, sh_mavros_distance_sensor_, shopts, "~/mavros_garmin_in", &MrsUavPx4Api::callbackDistanceSensor,
                           error_type_t::not_receiving_distance_sensor, "Not receiving distance sensor data");
 
+  shopts.subscription_options.callback_group = newCallbackGroup();
   init_subscriber_handler(this, sh_mavros_imu_, shopts, "~/mavros_imu_in", &MrsUavPx4Api::callbackImu, error_type_t::not_receiving_imu,
                           "Not receiving IMU data");
 
+  shopts.subscription_options.callback_group = newCallbackGroup();
   sh_mavros_magnetometer_heading_ =
       mrs_lib::SubscriberHandler<std_msgs::msg::Float64>(shopts, "~/mavros_magnetometer_in", &MrsUavPx4Api::callbackMagnetometer, this);
 
+  shopts.subscription_options.callback_group = newCallbackGroup();
   sh_mavros_magnetic_field_ =
       mrs_lib::SubscriberHandler<sensor_msgs::msg::MagneticField>(shopts, "~/mavros_magnetic_field_in", &MrsUavPx4Api::callbackMagneticField, this);
 
-
+  shopts.subscription_options.callback_group = newCallbackGroup();
   sh_mavros_altitude_ = mrs_lib::SubscriberHandler<mavros_msgs::msg::Altitude>(shopts, "~/mavros_altitude_in", &MrsUavPx4Api::callbackAltitude, this);
 
+  shopts.subscription_options.callback_group = newCallbackGroup();
   sh_gps_status_raw_ = mrs_lib::SubscriberHandler<mavros_msgs::msg::GPSRAW>(shopts, "~/mavros_gps_status_raw_in", &MrsUavPx4Api::callbackGpsStatusRaw, this);
 
   // In simulation ignore the timeout for RC channels and battery state
@@ -394,8 +408,10 @@ void MrsUavPx4Api::initialize(const rclcpp::Node::SharedPtr &node, std::shared_p
     shopts.no_message_timeout = mrs_lib::no_timeout;
   }
 
+  shopts.subscription_options.callback_group = newCallbackGroup();
   sh_mavros_rc_ = mrs_lib::SubscriberHandler<mavros_msgs::msg::RCIn>(shopts, "~/mavros_rc_in", &MrsUavPx4Api::callbackRC, this);
 
+  shopts.subscription_options.callback_group = newCallbackGroup();
   sh_mavros_battery_ = mrs_lib::SubscriberHandler<sensor_msgs::msg::BatteryState>(shopts, "~/mavros_battery_in", &MrsUavPx4Api::callbackBattery, this);
 
   // | ----------------------- publishers ----------------------- |
@@ -413,7 +429,7 @@ void MrsUavPx4Api::initialize(const rclcpp::Node::SharedPtr &node, std::shared_p
 
     opts.node           = node_;
     opts.autostart      = true;
-    opts.callback_group = callback_group_;
+    opts.callback_group = newCallbackGroup();
 
     timer_main_ = std::make_shared<TimerType>(opts, rclcpp::Rate(10.0, clock_), callback_fcn);
   }
@@ -421,6 +437,18 @@ void MrsUavPx4Api::initialize(const rclcpp::Node::SharedPtr &node, std::shared_p
   RCLCPP_INFO(node_->get_logger(), "initialized");
 
   is_initialized_ = true;
+}
+
+//}
+
+/* newCallbackGroup() //{ */
+
+rclcpp::CallbackGroup::SharedPtr MrsUavPx4Api::newCallbackGroup() {
+
+  auto group = node_->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+  callback_groups_.push_back(group);
+
+  return group;
 }
 
 //}
@@ -877,9 +905,22 @@ void MrsUavPx4Api::callbackOdometryLocal(const nav_msgs::msg::Odometry::ConstSha
 
   double lat, lon, correct_x, correct_y;
 
+  bool   ref_latlon_init;
+  double ref_sin_lat, ref_cos_lat, ref_lat, ref_lon, ref_utm_x, ref_utm_y;
+  {
+    std::scoped_lock lock(mutex_ref_latlon_);
+    ref_latlon_init = _ref_latlon_init;
+    ref_sin_lat     = _ref_sin_lat;
+    ref_cos_lat     = _ref_cos_lat;
+    ref_lat         = _ref_lat;
+    ref_lon         = _ref_lon;
+    ref_utm_x       = _ref_utm_x;
+    ref_utm_y       = _ref_utm_y;
+  }
+
   if (_capabilities_.produces_position) {
 
-    if (_capabilities_.produces_gnss and _ref_latlon_init) {
+    if (_capabilities_.produces_gnss and ref_latlon_init) {
 
       // The px4 Azimuthal Equidistant Projection of WGS84 is inconsistent with the UTM conversion is MRS system,
       // therefore, we convert it back to WGS84 frame and then convert correctly using mrs_lib.
@@ -893,22 +934,22 @@ void MrsUavPx4Api::callbackOdometryLocal(const nav_msgs::msg::Odometry::ConstSha
         const double sin_c = sin(c);
         const double cos_c = cos(c);
 
-        const double lat_rad = asin(cos_c * _ref_sin_lat + (x_rad * sin_c * _ref_cos_lat) / c);
-        const double lon_rad = (_ref_lon + atan2(y_rad * sin_c, c * _ref_cos_lat * cos_c - x_rad * _ref_sin_lat * sin_c));
+        const double lat_rad = asin(cos_c * ref_sin_lat + (x_rad * sin_c * ref_cos_lat) / c);
+        const double lon_rad = (ref_lon + atan2(y_rad * sin_c, c * ref_cos_lat * cos_c - x_rad * ref_sin_lat * sin_c));
 
         lat = RAD2DEG(lat_rad);
         lon = RAD2DEG(lon_rad);
 
       } else {
-        lat = RAD2DEG(_ref_lat);
-        lon = RAD2DEG(_ref_lon);
+        lat = RAD2DEG(ref_lat);
+        lon = RAD2DEG(ref_lon);
       }
       // END PX4 CODE
 
       mrs_lib::UTM(lat, lon, &correct_x, &correct_y);
 
-      correct_x = correct_x - _ref_utm_x;
-      correct_y = correct_y - _ref_utm_y;
+      correct_x = correct_x - ref_utm_x;
+      correct_y = correct_y - ref_utm_y;
 
       position.point.x = correct_x;
       position.point.y = correct_y;
@@ -937,7 +978,7 @@ void MrsUavPx4Api::callbackOdometryLocal(const nav_msgs::msg::Odometry::ConstSha
 
   if (_capabilities_.produces_odometry) {
 
-    if (_capabilities_.produces_gnss and _ref_latlon_init) {
+    if (_capabilities_.produces_gnss and ref_latlon_init) {
 
       auto odom_new                 = odom;
       odom_new.pose.pose.position.x = correct_x;
@@ -1019,10 +1060,11 @@ void MrsUavPx4Api::callbackNavsatFix(const sensor_msgs::msg::NavSatFix::ConstSha
 
     if (!_ref_latlon_init) {
 
-      _ref_lat     = DEG2RAD(msg->latitude);
-      _ref_lon     = DEG2RAD(msg->longitude);
-      _ref_sin_lat = sin(_ref_lat);
-      _ref_cos_lat = cos(_ref_lat);
+      std::scoped_lock lock(mutex_ref_latlon_);
+      _ref_lat         = DEG2RAD(msg->latitude);
+      _ref_lon         = DEG2RAD(msg->longitude);
+      _ref_sin_lat     = sin(_ref_lat);
+      _ref_cos_lat     = cos(_ref_lat);
       mrs_lib::UTM(msg->latitude, msg->longitude, &_ref_utm_x, &_ref_utm_y);
       _ref_latlon_init = true;
     }
