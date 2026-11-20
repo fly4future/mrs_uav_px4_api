@@ -35,6 +35,7 @@
 #include <mavros_msgs/msg/altitude.hpp>
 #include <mavros_msgs/msg/actuator_control.hpp>
 #include <mavros_msgs/msg/gpsraw.hpp>
+#include <mavros_msgs/msg/rtk_baseline.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -177,6 +178,7 @@ private:
   mrs_lib::SubscriberHandler<mavros_msgs::msg::RCIn>          sh_mavros_rc_;
   mrs_lib::SubscriberHandler<mavros_msgs::msg::Altitude>      sh_mavros_altitude_;
   mrs_lib::SubscriberHandler<mavros_msgs::msg::GPSRAW>        sh_gps_status_raw_;
+  mrs_lib::SubscriberHandler<mavros_msgs::msg::RTKBaseline>   sh_sim_rtk_baseline_;
   mrs_lib::SubscriberHandler<sensor_msgs::msg::BatteryState>  sh_mavros_battery_;
   /* mrs_lib::SubscriberHandler<mrs_modules_msgs::msg::Bestpos> sh_rtk_; */
 
@@ -805,6 +807,9 @@ void MrsUavPx4Api::initSubscribers() {
 
   if (_capabilities_.produces_gnss_status) {
     sh_gps_status_raw_ = mrs_lib::SubscriberHandler<mavros_msgs::msg::GPSRAW>(shopts, "~/mavros_gps_status_raw_in", &MrsUavPx4Api::callbackGpsStatusRaw, this);
+    if (_simulation_) {
+      sh_sim_rtk_baseline_ = mrs_lib::SubscriberHandler<mavros_msgs::msg::RTKBaseline>(shopts, "~/sim_rtk_baseline_in");
+    }
     addCheckedTopic(sh_gps_status_raw_, true);
   }
 
@@ -1443,6 +1448,11 @@ void MrsUavPx4Api::callbackGpsStatusRaw(const mavros_msgs::msg::GPSRAW::ConstSha
 
   gps_info_out.stamp    = msg->header.stamp; // [GPS_FIX_TYPE] GPS fix type
   gps_info_out.fix_type = msg->fix_type;     // [GPS_FIX_TYPE] GPS fix type
+
+  // simulation: PX4 SITL always reports a 3D fix, take the RTK state from the simulated base (--enable-rtk) as the F9P would report it
+  if (_simulation_ && sh_sim_rtk_baseline_.hasMsg() && (clock_->now() - sh_sim_rtk_baseline_.lastMsgTime()).seconds() < 1.0) {
+    gps_info_out.fix_type = sh_sim_rtk_baseline_.getMsg()->rtk_health == 1 ? 6 : 5; // GPS_FIX_TYPE_RTK_FIXED : GPS_FIX_TYPE_RTK_FLOAT
+  }
 
   gps_info_out.lat                = double(msg->lat) / 10000000; // [deg] Latitude (WGS84, EGM96 ellipsoid)
   gps_info_out.lon                = double(msg->lon) / 10000000; // [deg] Longitude (WGS84, EGM96 ellipsoid)

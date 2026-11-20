@@ -152,6 +152,7 @@ def generate_launch_description():
                   ('~/mavros_altitude_in', 'mavros/altitude'),
                   ('~/mavros_battery_in', 'mavros/battery'),
                   ('~/mavros_gps_status_raw_in', 'mavros/gpsstatus/gps1/raw'),
+                  ('~/sim_rtk_baseline_in', 'mavros/gps_rtk/rtk_baseline'),
 
                   ('~/mavros_cmd_out', 'mavros/cmd/command'),
                   ('~/mavros_set_mode_out', 'mavros/set_mode'),
